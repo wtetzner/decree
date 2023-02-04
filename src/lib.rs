@@ -10,6 +10,11 @@ pub enum Endianness {
 pub trait BitSource {
     fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<(), Error>;
 
+    #[inline]
+    fn write_to(&self, sink: &mut (impl BitSink + ?Sized), pos: usize) -> Result<(), Error> {
+        self.write(sink, 0, BitSource::size(self), pos)
+    }
+
     /// The number of bits contained in this source.
     fn size(&self) -> usize;
 }
