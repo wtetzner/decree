@@ -1,0 +1,10 @@
+[package]
+name = "decree"
+description = "Binary encoding/decoding library."
+version = "0.1.0"
+edition = "2021"
+authors = ["Walter Tetzner <walter@waltertetzner.net>"]
+license="Apache-2.0"
+
+[dependencies]
+thiserror = "*"
