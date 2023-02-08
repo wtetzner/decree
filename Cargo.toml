@@ -8,3 +8,4 @@ license="Apache-2.0"
 
 [dependencies]
 thiserror = "*"
+decree-derive = { path = "decree-derive" }

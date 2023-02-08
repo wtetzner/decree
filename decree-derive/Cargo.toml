@@ -1,0 +1,18 @@
+[package]
+name = "decree-derive"
+version = "0.1.0"
+authors = ["Walter Tetzner <walter@waltertetzner.net>"]
+description = "Custom derive macros for the traits in decree."
+license = "Apache-2.0"
+edition = "2021"
+
+[dependencies]
+syn = { version = "*", features = ["full"]}
+quote = "*"
+darling = "*"
+proc-macro2 = "*"
+logos = "*"
+
+[lib]
+proc-macro = true
+
