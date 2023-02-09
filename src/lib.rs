@@ -2,6 +2,8 @@ mod error;
 pub use decree_derive::BitSource;
 pub use error::Error;
 
+pub type Result<T> = core::result::Result<T, error::Error>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endianness {
     BIG,
@@ -9,15 +11,21 @@ pub enum Endianness {
 }
 
 pub trait BitSource: Sized {
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error>;
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize>;
 
     #[inline]
-    fn write_to(&self, sink: &mut (impl BitSink + ?Sized), pos: usize) -> Result<usize, Error> {
+    fn write_to(&self, sink: &mut (impl BitSink + ?Sized), pos: usize) -> Result<usize> {
         self.write(sink, 0, BitSource::size(self), pos)
     }
 
     #[inline]
-    fn bits_into<T: BitSink + Default>(&self) -> Result<T, Error> {
+    fn bits_into<T: BitSink + Default>(&self) -> Result<T> {
         let mut sink = T::default();
         self.write_to(&mut sink, 0)?;
         Ok(sink)
@@ -25,9 +33,7 @@ pub trait BitSource: Sized {
 
     #[inline]
     fn display_bits<'a>(&'a self) -> DisplayBits<'a, Self> {
-        DisplayBits {
-            source: self,
-        }
+        DisplayBits { source: self }
     }
 
     /// The number of bits contained in this source.
@@ -35,7 +41,14 @@ pub trait BitSource: Sized {
 }
 
 pub trait BitSink {
-    fn write(&mut self, bytes: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error>;
+    fn write(
+        &mut self,
+        bytes: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize>;
 
     /// The number of bits contained in this sink. None is returned if
     /// the sink can grow arbitrarily large.
@@ -62,27 +75,26 @@ impl<'a, T: BitSource> core::fmt::Display for DisplayBits<'a, T> {
         } else {
             num_bytes
         };
-        println!("<num-bytes>: {}, num-bits: {}", num_bytes, num_bits);
         let mut bytes = vec![0u8; num_bytes];
-        println!("sink bytes: {:?}", bytes);
         {
             let mut sink = LittleEndian::<Vec<u8>>::with_bits(&mut bytes, num_bits).unwrap();
-            println!("sink bits: {:?}", BitSink::size(&sink));
-            println!("writing to...");
             self.source.write_to(&mut sink, 0).unwrap();
-            println!("wrote");
         }
         for index in 0..num_bytes {
             let index = num_bytes - 1 - index;
             if index == num_bytes - 1 {
                 let bits = num_bits % 8;
-                println!("bits: {}", bits);
                 let bits = if bits == 0 { 8 } else { bits };
-                let chunk = BitChunk { byte: bytes[index], bits: bits as u8 };
-                println!("chunk: {}", chunk);
+                let chunk = BitChunk {
+                    byte: bytes[index],
+                    bits: bits as u8,
+                };
                 write!(f, "{}", chunk)?;
             } else {
-                let chunk = BitChunk { byte: bytes[index], bits: 8 };
+                let chunk = BitChunk {
+                    byte: bytes[index],
+                    bits: 8,
+                };
                 write!(f, "{}", chunk)?;
             }
         }
@@ -93,24 +105,42 @@ impl<'a, T: BitSource> core::fmt::Display for DisplayBits<'a, T> {
 impl<T: AsRef<[u8]>> LittleEndian<T> {
     pub fn new<B: AsRef<[u8]>>(bytes: B) -> LittleEndian<B> {
         let bits = bytes.as_ref().len() * 8;
-        LittleEndian {
-            bytes,
-            bits,
-        }
+        LittleEndian { bytes, bits }
     }
 
-    pub fn with_bits<B: AsRef<[u8]>>(bytes: B, bits: usize)-> Result<LittleEndian<B>, Error> {
+    pub fn with_bits<B: AsRef<[u8]>>(bytes: B, bits: usize) -> Result<LittleEndian<B>> {
         let max_bits = bytes.as_ref().len() * 8;
         if bits > max_bits {
-            return Err(Error::input_bits_out_of_range("LittleEndian", 0, bits, 0, max_bits));
+            return Err(Error::input_bits_out_of_range(
+                "LittleEndian",
+                0,
+                bits,
+                0,
+                max_bits,
+            ));
         }
         Ok(LittleEndian { bytes, bits })
     }
 }
 
 impl<T: AsRef<[u8]>> BitSource for LittleEndian<T> {
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
-        check_input_range("LittleEndian", start, len, 0, BitSource::size(self))?;
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
+        check_input_range(
+            "LittleEndian",
+            start,
+            len,
+            0,
+            BitSource::size(self)
+        )?;
         sink.write(self.bytes.as_ref(), start, len, pos, Endianness::LITTLE)
     }
 
@@ -120,13 +150,28 @@ impl<T: AsRef<[u8]>> BitSource for LittleEndian<T> {
 }
 
 impl<T: AsRef<[u8]> + AsMut<[u8]>> BitSink for LittleEndian<T> {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
         let size = BitSink::size(self);
+        check_output_range(
+            "LittleEndian",
+            pos,
+            len,
+            size
+        )?;
         let mut bytes = self.bytes.as_mut();
-        check_output_range("LittleEndian", pos, len, size)?;
         write_bits_le(source, start, len, pos, &mut bytes)
     }
 
@@ -136,20 +181,39 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> BitSink for LittleEndian<T> {
 }
 
 #[inline]
-pub fn check_input_range(source: impl Into<String>, start: usize, len: usize, input_start: usize, input_end: usize) -> Result<(), Error> {
-    let end = start + len - 1;
+pub fn check_input_range(
+    source: impl core::fmt::Display,
+    start: usize,
+    len: usize,
+    input_start: usize,
+    input_end: usize,
+) -> Result<()> {
+    let end = if len == 0 { start } else { start + len - 1 };
     if end > input_end || start < input_start {
-        return Err(Error::input_bits_out_of_range(source, start, end, input_start, input_end));
+        return Err(Error::input_bits_out_of_range(
+            source,
+            start,
+            end,
+            input_start,
+            input_end,
+        ));
     }
     Ok(())
 }
 
 #[inline]
-fn check_output_range(sink: impl Into<String>, start: usize, len: usize, output_len: Option<usize>) -> Result<(), Error> {
+fn check_output_range(
+    sink: impl core::fmt::Display,
+    start: usize,
+    len: usize,
+    output_len: Option<usize>,
+) -> Result<()> {
     if let Some(output_len) = output_len {
         let space_to_write = output_len - start;
         if space_to_write < len {
-            return Err(Error::output_bits_out_of_range(sink, len, start, output_len));
+            return Err(Error::output_bits_out_of_range(
+                sink, len, start, output_len,
+            ));
         }
         Ok(())
     } else {
@@ -159,7 +223,16 @@ fn check_output_range(sink: impl Into<String>, start: usize, len: usize, output_
 
 impl BitSource for u8 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("u8", start, len, 0, 7)?;
         sink.write(&[*self], start, len, pos, Endianness::LITTLE)
     }
@@ -172,7 +245,16 @@ impl BitSource for u8 {
 
 impl BitSource for u16 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("u16", start, len, 0, 15)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -185,7 +267,16 @@ impl BitSource for u16 {
 
 impl BitSource for u32 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("u32", start, len, 0, 31)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -198,7 +289,16 @@ impl BitSource for u32 {
 
 impl BitSource for u64 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("u64", start, len, 0, 63)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -211,7 +311,16 @@ impl BitSource for u64 {
 
 impl BitSource for u128 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("u128", start, len, 0, 127)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -224,7 +333,16 @@ impl BitSource for u128 {
 
 impl BitSource for i8 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("i8", start, len, 0, 7)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -237,7 +355,16 @@ impl BitSource for i8 {
 
 impl BitSource for i16 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("i16", start, len, 0, 15)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -250,7 +377,16 @@ impl BitSource for i16 {
 
 impl BitSource for i32 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("i32", start, len, 0, 31)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -263,7 +399,16 @@ impl BitSource for i32 {
 
 impl BitSource for i64 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("i64", start, len, 0, 63)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -276,7 +421,16 @@ impl BitSource for i64 {
 
 impl BitSource for i128 {
     #[inline]
-    fn write(&self, sink: &mut (impl BitSink + ?Sized), start: usize, len: usize, pos: usize) -> Result<usize, Error> {
+    fn write(
+        &self,
+        sink: &mut (impl BitSink + ?Sized),
+        start: usize,
+        len: usize,
+        pos: usize,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         check_input_range("i128", start, len, 0, 127)?;
         sink.write(&(*self).to_le_bytes(), start, len, pos, Endianness::LITTLE)
     }
@@ -288,7 +442,17 @@ impl BitSource for i128 {
 }
 
 impl BitSink for u8 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -306,7 +470,17 @@ impl BitSink for u8 {
 }
 
 impl BitSink for i8 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -324,7 +498,17 @@ impl BitSink for i8 {
 }
 
 impl BitSink for u16 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -342,7 +526,17 @@ impl BitSink for u16 {
 }
 
 impl BitSink for i16 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -359,7 +553,17 @@ impl BitSink for i16 {
 }
 
 impl BitSink for u32 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -376,7 +580,17 @@ impl BitSink for u32 {
 }
 
 impl BitSink for i32 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -393,7 +607,17 @@ impl BitSink for i32 {
 }
 
 impl BitSink for u64 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -410,7 +634,17 @@ impl BitSink for u64 {
 }
 
 impl BitSink for i64 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -427,7 +661,17 @@ impl BitSink for i64 {
 }
 
 impl BitSink for u128 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -444,7 +688,17 @@ impl BitSink for u128 {
 }
 
 impl BitSink for i128 {
-    fn write(&mut self, source: &[u8], start: usize, len: usize, pos: usize, endianness: Endianness) -> Result<usize, Error> {
+    fn write(
+        &mut self,
+        source: &[u8],
+        start: usize,
+        len: usize,
+        pos: usize,
+        endianness: Endianness,
+    ) -> Result<usize> {
+        if len == 0 {
+            return Ok(0);
+        }
         if endianness == Endianness::BIG {
             todo!();
         }
@@ -499,7 +753,7 @@ impl BitChunk {
         self.bits() == 0
     }
 }
- 
+
 #[inline]
 fn next_chunk_le(bytes: &[u8], start: usize, len: usize) -> BitChunk {
     let chunk = if len == 0 {
@@ -526,7 +780,6 @@ fn write_chunk_le_helper(chunk: BitChunk, bytes: &mut [u8], start: usize) -> Bit
     let byte = start / 8;
     let bit = start - (byte * 8);
     let num_bits = usize::min(chunk.bits(), 8 - bit);
-    println!("    writing {} bits to byte {} at bit {}", num_bits, byte, bit);
     let mask = mask(num_bits);
     let value = (bytes[byte] & !(mask << bit)) | ((chunk.byte() & mask) << bit);
     bytes[byte] = value;
@@ -544,7 +797,6 @@ fn write_chunk_le(chunk: BitChunk, bytes: &mut [u8], start: usize) -> usize {
     let mut start = start;
     while !chunk.is_empty() {
         let bits = chunk.bits();
-        println!("  writing chunk: {}", chunk);
         chunk = write_chunk_le_helper(chunk, bytes, start);
         let bits_written = bits - chunk.bits();
         start += bits_written;
@@ -568,7 +820,13 @@ fn mask(len: usize) -> u8 {
     }
 }
 
-fn write_bits_le(source: &[u8], start: usize, len: usize, pos: usize, sink: &mut [u8]) -> Result<usize, Error> {
+fn write_bits_le(
+    source: &[u8],
+    start: usize,
+    len: usize,
+    pos: usize,
+    sink: &mut [u8],
+) -> Result<usize> {
     let mut pos = pos;
     let mut start = start;
     let mut len = len;
@@ -581,81 +839,63 @@ fn write_bits_le(source: &[u8], start: usize, len: usize, pos: usize, sink: &mut
         len -= chunk.bits();
         chunk = next_chunk_le(source, start, len);
     }
-    println!("  bytes: {:?}", print_bytes(sink));
     Ok(written)
-}
-
-fn print_bytes(bytes: &[u8]) -> String {
-    let mut string = String::new();
-    string.push('[');
-    let mut first = true;
-    for byte in bytes {
-        if first {
-            first = false;
-        } else {
-            string.push_str(", ");
-        }
-        string.push_str(&format!("{:08b}", byte));
-    }
-    string.push(']');
-    string
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::{Debug, Binary};
+    use std::fmt::{Binary, Debug};
 
     #[test]
     fn test_bit_writing() {
-        test_bit_write(
-            0b11110001u8,
-            0b11111111u8,
-            1, 3,
-            2,
-            Ok(0b11100011),
-        );
-        test_bit_write(
-            0b11110001u8,
-            0b11111111u8,
-            0, 8,
-            0,
-            Ok(0b11110001),
-        );
+        test_bit_write(0b11110001u8, 0b11111111u8, 1, 3, 2, Ok(0b11100011));
+        test_bit_write(0b11110001u8, 0b11111111u8, 0, 8, 0, Ok(0b11110001));
 
         test_bit_write(
             0b00000000_00011111_10000000_00000000u32,
             00000000u8,
-            14, 5,
+            14,
+            5,
             0,
-         Ok(0b11110u8),
+            Ok(0b11110u8),
         );
 
         test_bit_write(
             0b00000000_00011111_10000000_00000000u32,
             0b00000000_00000001_11111110_00000000u32,
-            14, 5,
+            14,
+            5,
             15,
-         Ok(0b00000000_00001111_01111110_00000000u32),
+            Ok(0b00000000_00001111_01111110_00000000u32),
         );
 
         test_bit_write(
             0b11110001u64,
             0b11111111u8,
-            0, 64,
+            0,
+            64,
             0,
             Err(Error::output_bits_out_of_range("u8", 64, 0, 8)),
         );
         test_bit_write(
             0b11110001u64,
             0b11111111u8,
-            7, 50,
+            7,
+            50,
             3,
             Err(Error::output_bits_out_of_range("u8", 50, 3, 8)),
         );
     }
 
-    fn test_bit_write<S: BitSink + Eq + Debug + Binary>(source: impl BitSource, sink: S, start: usize, len: usize, pos: usize, expected: Result<S, Error>) {
+    fn test_bit_write<S: BitSink + Eq + Debug + Binary>(
+        source: impl BitSource,
+        sink: S,
+        start: usize,
+        len: usize,
+        pos: usize,
+        expected: Result<S>,
+    ) {
         let mut sink = sink;
         let result = match source.write(&mut sink, start, len, pos) {
             Ok(_) => Ok(sink),
